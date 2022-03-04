@@ -1,0 +1,329 @@
+---
+title: "Problema 3: ACP Estados"
+author: "Alejandro Alonso Membrilla"
+output: html_document 
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(haven)
+library(shiny)
+library(ggplot2)
+```
+
+## Introducción
+En este ejercicio contamos con un conjunto de datos que recoge una serie de variables medidas en distintos países. El objetivo será realizar sobre dichos datos un análisis de componentes principales, no sin antes aplicarles un análisis exploratorio. El estudio buscará tanto demostrar los conocimientos sobre la teoría de la reducción de la dimensionalidad en componentes principales, como tratar de encontrar una interpretación de las mismas que pueda ser útil a la hora de conocer en profundidad el *dataset* analizado.
+
+Las variables estudiadas para cada país son las siguientes:
+
+1. **Ztlibrop**: Número de libros publicados.
+2. **Ztejerci**: Cociente entre el número de individuos en ejército de tierra y población total del estado.
+3. **Ztpobact**: Cociente entre población activa y total.
+4. **Ztenergi**: Tasa de consumo energético.
+5. **Zpservi**: Población del sector servicios.
+6. **Zpagricu**: Población del sector agrícola.
+7. **Ztmedico**: Tasa de médicos por habitante.
+8. **Zespvida**: Esperanza de vida.
+9. **Ztminfan**: Tasa de mortalidad infantil.
+10. **Zpobdens**: Densidad de población
+11. **Zpoburb**: Porcentaje de población urbana
+
+En primer lugar, procedemos a cargar los datos en un dataframe y a imprimirlos por pantalla:
+```{r}
+datos_raw<-read_sav("./estados.sav", encoding='latin1')
+nombre_vars<-colnames(datos_raw)[2:length(colnames(datos_raw))]
+datos_raw
+```
+
+En particular vemos que, efectivamente, hay 34 filas (países diferentes) y los datos aparentan estar normalizados. Para cerciorarnos de esto imprimiremos la media y desviación típica de cada variable (los valores perdidos se cuentan, pero se ignoran para el resto de cálculos):
+
+```{r basic_info, echo=FALSE}
+inputPanel(
+  selectInput("col", label = "Elige la variable:",
+              choices = nombre_vars, 
+              selected = "ZPOBDENS")
+)
+renderPrint({
+  print(input$col)
+  print( sprintf("Media: %1.20f", mean(datos_raw[[input$col]], na.rm=TRUE)) )
+  print( sprintf("Desviación típica: %1.20f", sd(datos_raw[[input$col]], na.rm=TRUE)) )
+  print( sprintf("Número de valores perdidos: %i", sum(is.na(datos_raw[[input$col]]))) )
+})
+```
+
+## Tratamiento de valores perdidos
+
+Vemos que solo hay un caso de valores perdidos (para la variable ZLIBROP). Al ser solo un caso, no merece la pena eliminar la fila completa puesto que estaríamos eliminando un país entero del estudio por una única variable. Una solución podría ser la de eliminar la columna en la que se ha encontrado dicho valor perdido, pero esto parece, a priori, un desperdicio de dichos datos, además de innecesario. Otra solución podría ser sustituir dicho valor por la media (las variables son todas numéricas), aunque nos parece interensante y más apropiado aplicar una imputación promediando el valor correspondiente de los 5 vecinos más cercanos:
+```{r carga_VIM, echo=FALSE, message=FALSE, warning=FALSE, cache=FALSE, comment=FALSE, paged.print=FALSE, results=FALSE}
+#install.packages("VIM")
+library(VIM)
+```
+
+```{r}
+#kNN mete una última columna para indicar los elementos en los que había valores perdidos
+datos<-kNN(datos_raw, "ZTLIBROP", nombre_vars)[1:length(datos_raw)]
+#Reestandarizamos los datos
+datos$ZTLIBROP = (datos$ZTLIBROP-mean(datos$ZTLIBROP))/sd(datos$ZTLIBROP)
+```
+
+## Estudio descriptivo de cada variable
+
+### Visualización: diagramas de barras
+
+El *dataset* ya no contiene valores perdidos y está normalizado. Ahora vamos a comparar cada uno de los atributos en función de cada país: 
+
+```{r panel_barplots, echo=FALSE}
+ui <- fluidPage(
+  # App title ----
+  inputPanel(
+    selectInput("column", label = "Elige la variable:",
+                choices = nombre_vars)
+  ),
+  mainPanel(
+    plotOutput("plot", width="100%"),
+  )
+)
+
+# Define server logic for random distribution app ----
+server <- function(input, output) {
+  y <- reactive({
+    input$column
+  })
+
+  output$plot <- renderPlot({
+    ggplot(data.frame(datos[[y()]]), aes(x=datos$PAIS, y=datos[[y()]])) + 
+    geom_bar(stat="identity") +
+    theme(axis.title.x=element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x=element_blank(),
+          axis.title.y=element_blank())
+  }, width=800, height=250)
+}
+
+shinyApp(ui, server)
+```
+
+Vemos que no hay atributos triviales (uniformes). Todos presentan, en menor o mayor medida, cierto grado de variabilidad, por lo que pueden ser útiles en un estudio descriptivo por parte de un experto.
+
+### Visualización: diagramas de cajas y bigotes
+
+También puede sernos útil visualizar un gráfico de cajas y bigotes para hacernos una idea de los valores atípicos por cada atributo:
+
+```{r fig.width=9, fig.height=5}
+boxplot( datos[nombre_vars], col=rainbow(length(nombre_vars)), las=2 ) #las=2 pone las etiquetas en vertical
+```
+
+A partir de la escala del gráfico, volvemos a asegurarnos de que los datos se encuentran estandarizados. Casi todas las variables tienen una distancia entre cuartiles Q1 y Q3 parecida, aunque algunas como la esperanza de vida o el ratio de población activa tienen un mínimo bastante por debajo de la media. La excepción es el tamaño del ejército, que suele concentrarse mucho más en la media pero que tiene unos 
+*outliers* muy destacados con un tamaño de ejército bastante superior.
+
+Conservar los *outliers* puede producir desviaciones importantes a la hora de calcular las componentes principales, obteniendo resultados que no sean lo suficientemente generales para describir la distribución. En cualquier caso, los valores excepcionales observados, especialmente en el caso del ejército, deberían ser estudiados independientemente. Aunque la variable que describe el tamaño del ejército es la que presenta el mayor número de valores atípicos, no parece ser tan alto como para eliminar la columna al completo. En su lugar se ha optado por sustituir los valores atípicos por la media de su columna:
+
+```{r}
+outlier<-function(data,na.rm=T){
+  H<-1.5*IQR(data)
+  data[data<quantile(data,0.25,na.rm = T)-H]<-NA
+  data[data>quantile(data,0.75, na.rm = T)+H]<-NA
+  data[is.na(data)]<-mean(data,na.rm=T)
+  data
+}
+
+# A continuación aplicamos esta función a cada una a de las variables
+# que presentan outliers y las volvemos a normalizar
+for(nombre_var in nombre_vars){
+  datos[[nombre_var]]<-outlier(datos[[nombre_var]])
+}
+datos[nombre_vars]<-scale(datos[nombre_vars])
+```
+
+Volviendo a dibujar el boxplot obtenemos:
+```{r echo=FALSE, fig.width=9, fig.height=5}
+boxplot( datos[nombre_vars], col=rainbow(length(nombre_vars)), las=2 )
+```
+
+### Estudio de la correlación
+
+Para que tenga sentido aplicar análisis de componentes principales a este conjunto de datos, las distintas variables que contiene deben estar correlacionadas (o al menos algunas de ellas). En caso contrario no obtendríamos ninguna reducción de la dimensionalidad y los resultados no serían muy útiles.
+
+```{r carga_corrplot, echo=FALSE, message=FALSE, warning=FALSE, cache=FALSE, comment=FALSE, paged.print=FALSE, results=FALSE}
+#install.packages("corrplot")
+library(corrplot)
+```
+
+Procedemos a observar la posible correlación entre las distintas columnas:
+
+```{r}
+datos_pca<-datos[,-1]
+correlaciones<-cor(datos_pca)
+corrplot(round(correlaciones,2), method="number")
+```
+
+Visualizamos de nuevo la matriz de correlaciones, esta vez agrupando las variables más correladas:
+
+```{r}
+corrplot(correlaciones, method="circle", order="hclust")
+```
+
+Vemos que hay 2 variables que no correlacionan fuertemente entre sí ni con las demás: el ejército y la densidad de población. Las demás correlacionan entre ellas en menor o mayor medida, aunque parecen formar dos grupos diferenciados. Esto podría indicar que el número de componentes principales óptimo será de unas 3 ó 4 componenetes.
+
+### Contraste de esfericidad de Bartlett
+
+Para poder confirmar nuestras sospehas sobre la correlación, aplicaremos el test de Bartlett. Como ya hemos visto, esta prueba permite comprobar si las distintas variables están correladas a nivel poblacional. Para ello, aplicamos un test de hipótesis tomando como hipótesis nula que el determinante de la matriz de correlaciones igual a 1 ($correlaciones=I_{34\times34}$ si todas las intercorrelaciones son 0, luego $|correlaciones|$=1). 
+
+```{r carga_psych, echo=FALSE, message=FALSE, warning=FALSE, cache=FALSE, comment=FALSE, paged.print=FALSE, results=FALSE}
+#install.packages("psych")
+library(psych)
+```
+
+Teniendo en cuenta que el tamaño de nuestra muestra es de $n=34$ países, realizamos el test de esfericidad de Bartlett para nuestra matriz de correlaciones.
+```{r, warning=FALSE}
+cortest.bartlett(correlaciones, n=34)
+```
+
+Hemos obtenido un p-valor muy bajo, del orden de $5\times10^{-52}$. Por tanto, el test es significativo y se rechaza la hipótesis nula asumida de que los datos estuviesen incorrelados.
+
+De esta forma hemos "probado" tanto visual como estadísticamente que el cálculo de componentes principales está justificado.
+
+## Análisis de Componentes Principales
+
+### Cálculo de las Componentes principales
+
+Procedemos a aplicar el algoritmo de cálculo de componentes principales mediante la función de **R** llamada *prcomp*. Como nuestro conjunto de datos ya está estandarizado, ponemos los argumentos *scale* y *center* a FALSE.
+
+```{r}
+PCA<-prcomp(datos_pca, scale=F, center = F)
+summary(PCA)
+```
+
+### Método del codo
+
+El método del codo es un criterio para seleccionar un subconjunto de las componentes principales que explique un porcentaje lo más alto posible de la información (varianza explicada) presente en el conjunto inicial, pero manteniendo el número de dimensiones lo más bajo posible.
+
+El método en cuestión toma las primeras componentes, aquellas con un porcentaje de varianza explicada más alto, hasta encontrar una componente que aporte una cantidad de información muy pequeña en comparación con la anterior. Visualizando la varianza acumulada con cada nueva componente, esto se produce en aquella componente que genere un "codo" en la gráfica.
+
+En nuestro caso, vemos que la primera componente principal es la que explica una mayor parte de la varianza con diferencia. Las 3 siguientes componentes principales explican entre un 15% y un 8%, muy cerca cada componente de su siguiente. Si obviamos el salto entre la primera y la segunda componente, no es hasta llegar a la 5ª que observamos una reducción considerable de la varianza explicada.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE}
+### Definición de funciones auxiliares
+dibujar_varianza_explicada<-function(varianza_explicada, size){
+  ggplot(data = data.frame(varianza_explicada, pc = 1:size),
+       aes(x = pc, y = varianza_explicada, fill=varianza_explicada )) +
+  geom_col(width = 0.3) +
+  scale_y_continuous(limits = c(0,0.6)) + theme_bw() +
+  labs(x = "Componente principal", y= " Proporción de varianza explicada")
+}
+
+dibujar_varianza_acumulada<-function(varianza_acum, size){
+  ggplot( data = data.frame(varianza_acum, pc = 1:size),
+        aes(x = pc, y = varianza_acum ,fill=varianza_acum )) +
+  geom_col(width = 0.5) +
+  scale_y_continuous(limits = c(0,1)) +
+  theme_bw() +
+  labs(x = "Componente principal",
+       y = "Proporción de varianza acumulada")
+}
+```
+
+Procedemos a visualizar la varianza acumulada con cada componente principal:
+```{r, figures-side, fig.show="hold", out.width="50%"}
+varianza_explicada <- PCA$sdev^2 / sum(PCA$sdev^2)
+dibujar_varianza_explicada(varianza_explicada, length(nombre_vars))
+
+varianza_acum<-cumsum(varianza_explicada)
+dibujar_varianza_acumulada(varianza_acum, length(nombre_vars))
+```
+
+Efectivamente, la 5ª componente principal explica una cantidad muy baja de varianza, tanto en comparación con la 4ª componente como en general. Aunque la diferencia entre la 1ª componente y la 2ª es incluso mayor (en términos relativos) que entre la 4ª y la 5ª, entendemos que tomar solamente la primera componente, con un 56% de varianza explicada, no representaría adecuadamente el conjunto de datos original. 
+
+Aplicando el método del codo, tomaremos las cuatro primeras componentes como base.
+
+### Influencia de cada variable en cada componente principal
+
+En este subapartado mostraremos la expresión analítica de cada componente principal, de forma numérica y en un gráfico de barras:
+
+```{r comp_corr, echo=FALSE}
+inputPanel(
+  selectInput("componente", label = "Elige una componente:",
+              choices = c(1:4), 
+              selected = 1)
+)
+renderPrint({
+  print(PCA$rotation[,as.numeric(input$componente)])
+})
+renderPlot({
+  ggplot(data.frame(PCA$rotation[,as.numeric(input$componente)]), aes(x=nombre_vars, y=PCA$rotation[,as.numeric(input$componente)])) + 
+    geom_bar(stat="identity") +
+    theme(axis.title.x=element_blank(),
+          axis.title.y=element_blank())
+  }, width=800, height=250)
+```
+
+Oservamos que las componentes 3 y 4 están generadas, casi en su totalidad, a partir de las variables correspondientes al ejército (componente 3) y a la densidad de población (componente 4), que contribuyen muy poco a las dos primeras componentes. Esto se debe a lo visto en la matriz de correlaciones: estas variables tienen una correlación muy baja con el resto y entre ellas, por lo que no puede reducirse o "fusionarse" la información que contienen con las demás.
+
+Todos los atributos, excepto los dos mencionados anteriormente, contribuyen fuertemente en la definición de la primera componente principal. La segunda está formada mayoritariamente por el ratio de población activa, aunque también por la densidad de población y el número de trabajadores en el sector servicios.
+
+### Representación gráfica de las componentes principales
+
+A continuación es posible seleccionar dos componentes principales (de entre las 4 escogidas), para las que se dibujará un gráfico comparando que variables tienen más peso en la definición de cada una:
+
+```{r carga_facto, echo=FALSE, message=FALSE, warning=FALSE, cache=FALSE, comment=FALSE, paged.print=FALSE, results=FALSE}
+#install.packages("factoextra")
+library(factoextra)
+```
+
+```{r compare_components1, echo=FALSE}
+inputPanel(
+  selectInput("comp1", label = "Elige una componente:",
+              choices = c(1:4), 
+              selected = 1),
+  selectInput("comp2", label = "Elige otra componente:",
+              choices = c(1:4), 
+              selected = 2)
+)
+
+renderPlot({
+  
+  fviz_pca_biplot(PCA, axes=c(as.numeric(input$comp1), as.numeric(input$comp2)),
+         alpha.ind ="contrib", col.var = "cos2",col.ind="seagreen",
+         gradient.cols = c("#FDF50E", "#FD960E", "#FD1E0E"),
+         repel=TRUE,
+         legend.title="Distancia")+theme_bw()
+})
+```
+
+Si comparamos las dos primeras componentes principales, vemos que la mayor parte de las variables contribuyen a la 1ª componente con más fuerza que a la 2ª (a excepción de la población activa), tal como cabría esperar considerando los porcentajes de varianza explicada de cada una.
+
+Comparando las componentes 3 y 4 reafirmamos lo dicho en el apartado anterior sobre las variables 
+
+A modo de anotación, los puntos numerados representan la correspondiente observación de la muestra proyectada sobre el plano generado por ambas componentes principales, y su intensidad representa su aportación a la varianza explicada.
+
+### Representación gráfica sobre las Componentes Principales
+
+Finalmente, los siguientes gráficos en 3D muestran las observaciones de nuestra muestra proyectadas sobre 3 de las 4 componentes principales escogidas. El color representa la suma de las contribuciones que dicho punto realiza sobre la varianza explicada de cada una de las componentes.
+
+```{r carga_plotly, echo=FALSE, message=FALSE, warning=FALSE, cache=FALSE, comment=FALSE, paged.print=FALSE, results=FALSE}
+#install.packages("plotly")
+library(plotly)
+```
+
+```{r}
+ind<-get_pca_ind(PCA)
+```
+
+Componentes 1, 2 y 3
+```{r}
+plot_ly(x=PCA$x[,1], y=PCA$x[,2], z=PCA$x[,3], type="scatter3d", mode="markers", 
+        color=rowSums(ind$contrib[,1:3]), size=1)
+```
+
+Componentes 1, 2 y 4
+```{r}
+plot_ly(x=PCA$x[,1], y=PCA$x[,2], z=PCA$x[,4], type="scatter3d", mode="markers", 
+        color=rowSums(ind$contrib[,c(1,2,4)]), size=1)
+```
+
+Componentes 2, 3 y 4
+```{r}
+plot_ly(x=PCA$x[,2], y=PCA$x[,3], z=PCA$x[,4], type="scatter3d", mode="markers", 
+        color=rowSums(ind$contrib[,2:4]), size=1)
+```
