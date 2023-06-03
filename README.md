@@ -1,6 +1,6 @@
 # ACP-problem-on-R-Shiny
 
-The main file is a R Markdown file with R Shiny apps. It can be compiled and executed on R Studio or from the browser.
+The main file is a R Markdown file with R Shiny apps for a Principal Components Analysis. It can be compiled and executed on R Studio or from the browser.
 
 The report can be read without compiling it at the following link:
 
